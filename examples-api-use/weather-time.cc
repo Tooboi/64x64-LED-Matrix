@@ -12,9 +12,11 @@
 #include <ctime>
 #include <signal.h>
 #include <thread>
-#include <string>
+#include <Magick++.h>
+#include <vector>
 
 using namespace rgb_matrix;
+using ImageVector = std::vector<Magick::Image>;
 
 volatile bool running = true;
 
@@ -113,6 +115,8 @@ float getTemperature(std::string &date_time, int &weather_code) {
     curl_global_cleanup();
     return temperature;
 }
+
+
 
 
 void handle_signal(int signal) {
