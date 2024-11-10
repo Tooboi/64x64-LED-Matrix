@@ -12,6 +12,7 @@
 #include <ctime>
 #include <signal.h>
 #include <thread>
+#include <string>
 
 using namespace rgb_matrix;
 
@@ -21,12 +22,13 @@ volatile bool running = true;
 static int usage(const char *progname);
 static bool parseColor(Color *c, const char *str);
 size_t WriteCallback(void *contents, size_t size, size_t nmemb, void *userp);
-float getTemperature(std::string &date_time);
+float getTemperature(std::string &date_time, int &weather_code);
 void handle_signal(int signal);
 void drawDisplay(RGBMatrix* canvas, const rgb_matrix::Font& font, 
                 rgb_matrix::Font* outline_font, const Color& color, 
                 const Color& bg_color, const Color& flood_color,
                 const char* temp_message, const char* time_message, const char* date_message,
+                const char* weather_message,  // New parameter for weather info
                 int letter_spacing, int base_y_orig);
 
 // Function implementations
@@ -57,7 +59,7 @@ size_t WriteCallback(void *contents, size_t size, size_t nmemb, void *userp) {
     return size * nmemb;
 }
 
-float getTemperature(std::string &date_time) {
+float getTemperature(std::string &date_time, int &weather_code) {
     CURL *curl;
     CURLcode res;
     std::string readBuffer;
@@ -80,9 +82,14 @@ float getTemperature(std::string &date_time) {
             std::string errs;
 
             if (Json::parseFromStream(reader, s, &obj, &errs)) {
-                if (obj.isMember("current") && obj["current"].isMember("temperature_2m") && obj["current"].isMember("time")) {
-                    temperature = obj["current"]["temperature_2m"].asFloat();
-                    date_time = obj["current"]["time"].asString();
+                if (obj.isMember("current")) {
+                    if (obj["current"].isMember("temperature_2m") && obj["current"].isMember("time")) {
+                        temperature = obj["current"]["temperature_2m"].asFloat();
+                        date_time = obj["current"]["time"].asString();
+                    }
+                    if (obj["current"].isMember("weather_code")) {
+                        weather_code = obj["current"]["weather_code"].asInt();  // Store weather code
+                    }
                 }
             }
         }
@@ -102,46 +109,44 @@ void drawDisplay(RGBMatrix* canvas, const rgb_matrix::Font& font,
                 rgb_matrix::Font* outline_font, const Color& color, 
                 const Color& bg_color, const Color& flood_color,
                 const char* temp_message, const char* time_message, const char* date_message,
+                const char* weather_message,  // New parameter for weather info
                 int letter_spacing, int base_y_orig) {
     canvas->Fill(flood_color.r, flood_color.g, flood_color.b);
 
     int char_width = 5;
-
     int temp_length = strlen(temp_message);
     int time_length = strlen(time_message);
     int date_length = strlen(date_message);
+    int weather_length = strlen(weather_message);  // Weather message length
 
     int temp_width = temp_length * char_width + (temp_length - 1) * letter_spacing;
     int time_width = time_length * char_width + (time_length - 1) * letter_spacing;
     int date_width = date_length * char_width + (date_length - 1) * letter_spacing;
+    int weather_width = weather_length * char_width + (weather_length - 1) * letter_spacing;
 
-    // Center the time horizontally
     int time_x = (canvas->width() - time_width) / 2;
     int temp_x = (canvas->width() - temp_width) / 2;
     int date_x = (canvas->width() - date_width) / 2;
+    int weather_x = (canvas->width() - weather_width) / 2;  // Center weather message horizontally
 
-    // Calculate vertical positions
     int screen_center_y = canvas->height() / 2;
-    int time_y = screen_center_y - font.height() / 2;  // Center the time vertically
-    int temp_y = time_y - font.height() - 2;           // Temperature 9 pixels above time
-    int date_y = time_y + font.height() + 2;           // Date 9 pixels below time
+    int time_y = screen_center_y - font.height() / 2;
+    int temp_y = time_y - font.height() - 2;
+    int date_y = time_y + font.height() + 2;
+    int weather_y = screen_center_y + font.height() + 12;  // Position for weather message
 
-    // Draw the text with optional outline
     if (outline_font) {
         rgb_matrix::DrawText(canvas, *outline_font, temp_x, temp_y + font.baseline(), color, NULL, temp_message, letter_spacing);
         rgb_matrix::DrawText(canvas, *outline_font, time_x, time_y + font.baseline(), color, NULL, time_message, letter_spacing);
         rgb_matrix::DrawText(canvas, *outline_font, date_x, date_y + font.baseline(), color, NULL, date_message, letter_spacing);
+        rgb_matrix::DrawText(canvas, *outline_font, weather_x, weather_y + font.baseline(), color, NULL, weather_message, letter_spacing);
     }
 
-    // Draw text without outline
     rgb_matrix::DrawText(canvas, font, temp_x, temp_y + font.baseline(), color, outline_font ? NULL : &bg_color, temp_message, letter_spacing);
     rgb_matrix::DrawText(canvas, font, time_x, time_y + font.baseline(), color, outline_font ? NULL : &bg_color, time_message, letter_spacing);
     rgb_matrix::DrawText(canvas, font, date_x, date_y + font.baseline(), color, outline_font ? NULL : &bg_color, date_message, letter_spacing);
+    rgb_matrix::DrawText(canvas, font, weather_x, weather_y + font.baseline(), color, outline_font ? NULL : &bg_color, weather_message, letter_spacing);
 }
-
-
-
-
 
 int main(int argc, char *argv[]) {
     signal(SIGINT, handle_signal);
@@ -205,8 +210,10 @@ int main(int argc, char *argv[]) {
     // Clear the display again to ensure there's no leftover garbage data
     canvas->Clear();
 
+    // Fetch weather data
     std::string date_time;
-    float temperature = getTemperature(date_time);
+    int weather_code;
+    float temperature = getTemperature(date_time, weather_code);
     char temperature_message[100];
     snprintf(temperature_message, sizeof(temperature_message), "%dF", static_cast<int>(std::round(temperature)));
 
@@ -220,12 +227,29 @@ int main(int argc, char *argv[]) {
     strftime(time_message, sizeof(time_message), "%l:%M %p", tm_info);
     strftime(date_message, sizeof(date_message), "%b %d %Y", tm_info);
 
+    // Set up weather message based on weather code
+    char weather_message[100];
+    switch (weather_code) {
+        case 0:
+            snprintf(weather_message, sizeof(weather_message), "Clear");
+            break;
+        case 1:
+            snprintf(weather_message, sizeof(weather_message), "Mostly Clear");
+            break;
+        case 2:
+            snprintf(weather_message, sizeof(weather_message), "Partly Cloudy");
+            break;
+        case 3:
+            snprintf(weather_message, sizeof(weather_message), "Overcast");
+            break;
+        default:
+            snprintf(weather_message, sizeof(weather_message), "Unknown");
+            break;
+    }
+
     int base_y = y_orig;
 
     while (running) {
-        time_t current_time;
-        struct tm *tm_info;
-
         time(&current_time);
         tm_info = localtime(&current_time);
 
@@ -236,8 +260,8 @@ int main(int argc, char *argv[]) {
         }
 
         drawDisplay(canvas, font, outline_font, color, bg_color, flood_color, 
-                    temperature_message, time_message, date_message, 
-                    letter_spacing, base_y);
+            temperature_message, time_message, date_message, weather_message, 
+            letter_spacing, base_y);
 
         std::this_thread::sleep_for(std::chrono::seconds(1));  // Update display every second
     }
@@ -245,4 +269,3 @@ int main(int argc, char *argv[]) {
     delete[] bdf_font_file;
     return 0;
 }
-
