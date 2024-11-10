@@ -1,5 +1,15 @@
 CFLAGS=-Wall -O3 -g -Wextra -Wno-unused-parameter
-CXXFLAGS=$(CFLAGS)
+CXXFLAGS=$(CFLAGS) -I/usr/include/curl -I/usr/include/jsoncpp  # Include paths for curl and jsoncpp
+# Add the path for the appropriate Magick header files
+CXXFLAGS=$(CFLAGS) -I/usr/include/curl -I/usr/include/jsoncpp -I/usr/include/GraphicsMagick  # If using GraphicsMagick
+# or
+CXXFLAGS=$(CFLAGS) -I/usr/include/curl -I/usr/include/jsoncpp -I/usr/include/ImageMagick-6  # If using ImageMagick
+CXXFLAGS=$(CFLAGS) -I/usr/include/curl -I/usr/include/jsoncpp -I/usr/include/ImageMagick-6 -I/usr/include/ImageMagick-6/magick
+CXXFLAGS=$(CFLAGS) -I/usr/include/curl -I/usr/include/jsoncpp -I/usr/include/ImageMagick-6 -I/usr/include/aarch64-linux-gnu/ImageMagick-6/magick
+CXXFLAGS=$(CFLAGS) -I/usr/include/curl -I/usr/include/jsoncpp -I/usr/include/ImageMagick-6 -I/usr/include/aarch64-linux-gnu/ImageMagick-6
+
+
+
 OBJECTS=demo-main.o minimal-example.o c-example.o text-example.o scrolling-text-example.o clock.o ledcat.o input-example.o pixel-mover.o
 BINARIES=demo minimal-example c-example text-example scrolling-text-example clock ledcat input-example pixel-mover
 
@@ -10,7 +20,7 @@ RGB_INCDIR=$(RGB_LIB_DISTRIBUTION)/include
 RGB_LIBDIR=$(RGB_LIB_DISTRIBUTION)/lib
 RGB_LIBRARY_NAME=rgbmatrix
 RGB_LIBRARY=$(RGB_LIBDIR)/lib$(RGB_LIBRARY_NAME).a
-LDFLAGS+=-L$(RGB_LIBDIR) -l$(RGB_LIBRARY_NAME) -lrt -lm -lpthread
+LDFLAGS+=-L$(RGB_LIBDIR) -l$(RGB_LIBRARY_NAME) -lrt -lm -lpthread -lcurl -ljsoncpp  # Add curl and jsoncpp to LDFLAGS
 
 # To compile image-example
 MAGICK_CXXFLAGS?=$(shell GraphicsMagick++-config --cppflags --cxxflags)
