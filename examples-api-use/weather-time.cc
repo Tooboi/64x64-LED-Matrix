@@ -68,8 +68,8 @@ float getTemperature(std::string &date_time, int &weather_code) {
     curl_global_init(CURL_GLOBAL_DEFAULT);
     curl = curl_easy_init();
 
-    if(curl) {
-        curl_easy_setopt(curl, CURLOPT_URL, "https://api.open-meteo.com/v1/forecast?latitude=40.6012&longitude=-74.559&current=temperature_2m&temperature_unit=fahrenheit&timezone=America%2FNew_York");
+    if (curl) {
+        curl_easy_setopt(curl, CURLOPT_URL, "https://api.open-meteo.com/v1/forecast?latitude=40.6012&longitude=-74.559&current=temperature_2m,weather_code&temperature_unit=fahrenheit&timezone=America%2FNew_York");
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &readBuffer);
 
@@ -83,15 +83,29 @@ float getTemperature(std::string &date_time, int &weather_code) {
 
             if (Json::parseFromStream(reader, s, &obj, &errs)) {
                 if (obj.isMember("current")) {
-                    if (obj["current"].isMember("temperature_2m") && obj["current"].isMember("time")) {
-                        temperature = obj["current"]["temperature_2m"].asFloat();
-                        date_time = obj["current"]["time"].asString();
+                    Json::Value current = obj["current"];
+                    
+                    // Get all values in one block
+                    if (current.isMember("temperature_2m") && 
+                        current.isMember("time") && 
+                        current.isMember("weather_code")) {
+                        
+                        temperature = current["temperature_2m"].asFloat();
+                        date_time = current["time"].asString();
+                        weather_code = current["weather_code"].asInt();
+                        
+                        // Remove debug prints from here, they'll be handled in main loop
+                    } else {
+                        std::cerr << "Missing required fields in API response" << std::endl;
                     }
-                    if (obj["current"].isMember("weather_code")) {
-                        weather_code = obj["current"]["weather_code"].asInt();  // Store weather code
-                    }
+                } else {
+                    std::cerr << "No 'current' object in API response" << std::endl;
                 }
+            } else {
+                std::cerr << "Error parsing JSON response: " << errs << std::endl;
             }
+        } else {
+            std::cerr << "Error fetching data from API: " << curl_easy_strerror(res) << std::endl;
         }
         curl_easy_cleanup(curl);
     }
@@ -99,6 +113,7 @@ float getTemperature(std::string &date_time, int &weather_code) {
     curl_global_cleanup();
     return temperature;
 }
+
 
 void handle_signal(int signal) {
     std::cerr << "Program interrupted, exiting..." << std::endl;
@@ -111,6 +126,9 @@ void drawDisplay(RGBMatrix* canvas, const rgb_matrix::Font& font,
                 const char* temp_message, const char* time_message, const char* date_message,
                 const char* weather_message,  // New parameter for weather info
                 int letter_spacing, int base_y_orig) {
+
+                    
+
     canvas->Fill(flood_color.r, flood_color.g, flood_color.b);
 
     int char_width = 5;
@@ -147,6 +165,10 @@ void drawDisplay(RGBMatrix* canvas, const rgb_matrix::Font& font,
     rgb_matrix::DrawText(canvas, font, date_x, date_y + font.baseline(), color, outline_font ? NULL : &bg_color, date_message, letter_spacing);
     rgb_matrix::DrawText(canvas, font, weather_x, weather_y + font.baseline(), color, outline_font ? NULL : &bg_color, weather_message, letter_spacing);
 }
+
+time_t last_weather_update = 0;
+const int WEATHER_UPDATE_INTERVAL = 900;  // 15 minutes in seconds
+int last_minute = -1;  // Track last minute we updated
 
 int main(int argc, char *argv[]) {
     signal(SIGINT, handle_signal);
@@ -205,7 +227,7 @@ int main(int argc, char *argv[]) {
     canvas->Clear();
 
     // Optional: Add a very brief sleep to allow for system settling
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
 
     // Clear the display again to ensure there's no leftover garbage data
     canvas->Clear();
@@ -227,45 +249,86 @@ int main(int argc, char *argv[]) {
     strftime(time_message, sizeof(time_message), "%l:%M %p", tm_info);
     strftime(date_message, sizeof(date_message), "%b %d %Y", tm_info);
 
-    // Set up weather message based on weather code
+   // Set up weather message based on weather code
     char weather_message[100];
     switch (weather_code) {
-        case 0:
-            snprintf(weather_message, sizeof(weather_message), "Clear");
-            break;
-        case 1:
-            snprintf(weather_message, sizeof(weather_message), "Mostly Clear");
-            break;
-        case 2:
-            snprintf(weather_message, sizeof(weather_message), "Partly Cloudy");
-            break;
-        case 3:
-            snprintf(weather_message, sizeof(weather_message), "Overcast");
-            break;
-        default:
-            snprintf(weather_message, sizeof(weather_message), "Unknown");
-            break;
+        case 0: snprintf(weather_message, sizeof(weather_message), "Clear"); break;
+        case 1: snprintf(weather_message, sizeof(weather_message), "Mostly Clear"); break;
+        case 2: snprintf(weather_message, sizeof(weather_message), "Partly Cloudy"); break;
+        case 3: snprintf(weather_message, sizeof(weather_message), "Overcast"); break;
+        default: snprintf(weather_message, sizeof(weather_message), "Unknown"); break;
     }
 
     int base_y = y_orig;
+    time_t last_weather_update = current_time;  // Track last weather update
+    const int WEATHER_UPDATE_INTERVAL = 900;    // 15 minutes in seconds
+    int last_minute = -1;                       // Track last minute we updated
 
     while (running) {
         time(&current_time);
         tm_info = localtime(&current_time);
-
-        // Check if the second has changed (i.e., it's a new minute)
-        if (tm_info->tm_sec == 0) {
+        
+        // Check if minute has changed
+        if (tm_info->tm_min != last_minute) {
             strftime(time_message, sizeof(time_message), "%l:%M %p", tm_info);
             strftime(date_message, sizeof(date_message), "%b %d %Y", tm_info);
+            last_minute = tm_info->tm_min;
+        }
+
+        // Check if it's time to update weather (every 15 minutes)
+        if (current_time - last_weather_update >= WEATHER_UPDATE_INTERVAL) {
+            std::cout << "Fetching weather update..." << std::endl;
+            temperature = getTemperature(date_time, weather_code);
+            snprintf(temperature_message, sizeof(temperature_message), "%dF", 
+                    static_cast<int>(std::round(temperature)));
+            
+            // Update weather message based on weather code
+            switch (weather_code) {
+                case 0: snprintf(weather_message, sizeof(weather_message), "Clear"); break;
+                case 1: snprintf(weather_message, sizeof(weather_message), "Mostly Clear"); break;
+                case 2: snprintf(weather_message, sizeof(weather_message), "Partly Cloudy"); break;
+                case 3: snprintf(weather_message, sizeof(weather_message), "Overcast"); break;
+                case 45: snprintf(weather_message, sizeof(weather_message), "Foggy"); break;
+                case 48: snprintf(weather_message, sizeof(weather_message), "Icy Fog"); break;
+                case 51: snprintf(weather_message, sizeof(weather_message), "Light Drizzle"); break;
+                case 53: snprintf(weather_message, sizeof(weather_message), "Drizzle"); break;
+                case 55: snprintf(weather_message, sizeof(weather_message), "Heavy Drizzle"); break;
+                case 61: snprintf(weather_message, sizeof(weather_message), "Light Rain"); break;
+                case 63: snprintf(weather_message, sizeof(weather_message), "Rain"); break;
+                case 65: snprintf(weather_message, sizeof(weather_message), "Heavy Rain"); break;
+                case 71: snprintf(weather_message, sizeof(weather_message), "Light Snow"); break;
+                case 73: snprintf(weather_message, sizeof(weather_message), "Snow"); break;
+                case 75: snprintf(weather_message, sizeof(weather_message), "Heavy Snow"); break;
+                case 80: snprintf(weather_message, sizeof(weather_message), "Light Showers"); break;
+                case 81: snprintf(weather_message, sizeof(weather_message), "Showers"); break;
+                case 82: snprintf(weather_message, sizeof(weather_message), "Heavy Showers"); break;
+                case 85: snprintf(weather_message, sizeof(weather_message), "Snow Showers"); break;
+                case 86: snprintf(weather_message, sizeof(weather_message), "Heavy Snow"); break;
+                case 95: snprintf(weather_message, sizeof(weather_message), "Thunderstorm"); break;
+                case 96:
+                case 99: snprintf(weather_message, sizeof(weather_message), "Thunder/Hail"); break;
+                default: snprintf(weather_message, sizeof(weather_message), "Unknown (%d)", weather_code); break;
+            }
+            
+            last_weather_update = current_time;
+            std::cout << "-----------------------" << std::endl;
+            std::cout << "Weather updated at: " << ctime(&current_time);
+            std::cout << "Temperature: " << temperature << "F" << std::endl;
+            std::cout << "Weather Code: " << weather_code << std::endl;
+            std::cout << "-----------------------" << std::endl;
         }
 
         drawDisplay(canvas, font, outline_font, color, bg_color, flood_color, 
             temperature_message, time_message, date_message, weather_message, 
             letter_spacing, base_y);
 
-        std::this_thread::sleep_for(std::chrono::seconds(1));  // Update display every second
+        std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 
+    delete canvas;
+    if (outline_font) {
+        delete outline_font;
+    }
     delete[] bdf_font_file;
     return 0;
 }
